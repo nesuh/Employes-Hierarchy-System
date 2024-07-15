@@ -1,7 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable,NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Position } from './position.entity';
+// import { format } from 'path';
+
+
 
 @Injectable()
 export class PositionsService {
@@ -29,8 +32,29 @@ export class PositionsService {
   }
 
   async remove(id: number): Promise<void> {
-    await this.positionsRepository.delete(id);
+    try {
+      // Check if the position has any children
+      const children = await this.positionsRepository.find({
+        where: { parentId: id },
+      });
+  
+      // If there are children, do not allow deletion
+      if (children.length > 0) {
+        throw new Error('Cannot delete a parent position that has children.');
+      }
+  
+      // If no children, proceed with deletion
+      await this.positionsRepository.delete(id);
+      console.log(`Position with id ${id} deleted successfully.`);
+    } catch (error) {
+      // Log the error message
+      console.error('Error deleting position:', error.message);
+      
+      // Re-throw the error for further handling if necessary
+      throw error;
+    }
   }
+  
 //find childrens with the same parentid or association usind similartity
   async getChildren(positionId: number): Promise<Position[]> {
     const parentPosition = await this.positionsRepository.findOne({
@@ -50,6 +74,8 @@ export class PositionsService {
       where: { id: positionId },
       relations: ['children'],
     });
+   
+
  // Handle the case where the position is not found
     if (!root) {
       throw new Error(`Position with id ${positionId} not found`);
@@ -61,6 +87,8 @@ export class PositionsService {
     return root;
   }
  // Fetch children for the current position
+//  buildHierarchy method to recursively fetch and assign all 
+// children to their respective parents.
   private async buildHierarchy(position: Position): Promise<void> {
     const children = await this.positionsRepository.find({
       where: { parentId: position.id },
@@ -76,11 +104,59 @@ export class PositionsService {
 
   //only find the root node soon  ...............
 
+// async getRootNode(): Promise<Position[]> {
+//   return await this.positionsRepository.find({ where: { parentId: null } });
+// }
 
+async getRoot(): Promise<Position[]> {
+  const rootNodes = await this.positionsRepository.find({
+    where: { parentId: null },
+    relations:[]
+  });
+
+  if (rootNodes.length === 0) {
+    throw new NotFoundException('No root nodes found');
+  }
+
+  return rootNodes;
+}
 
 
   //find  any children backtrace soon ...............
-  
+// Fetch the upward hierarchy starting from a given positionId
+async getHierarchyUpwards(positionId: number): Promise<Position[]> {
+   // Fetch the position with the given ID and its immediate parent
+  const position = await this.positionsRepository.findOne({
+    where: { id: positionId },
+    relations: ['parent'],
+  });
+
+  // Handle the case where the position is not found
+  if (!position) {
+    throw new Error(`Position with id ${positionId} not found`);
+  }
+// Build the upward hierarchy starting from the current position
+  const hierarchy = await this.buildHierarchyUpwards(position);
+  return hierarchy;
+}
+
+// Recursively fetch parent positions
+private async buildHierarchyUpwards(position: Position): Promise<Position[]> {
+  const hierarchy: Position[] = [];
+  let currentPosition = position;
+
+  while (currentPosition) {
+    hierarchy.unshift(currentPosition); // Add the current position to the start of the array
+    currentPosition = currentPosition.parentId
+      ? await this.positionsRepository.findOne({ where: { id: currentPosition.parentId } })
+      : null;
+
+        //? is used for true case 
+        //: used for false
+  }
+
+  return hierarchy;
+}
 }
 
 
