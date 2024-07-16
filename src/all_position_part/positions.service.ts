@@ -1,9 +1,9 @@
 import { Injectable,NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository,IsNull } from 'typeorm';
 import { Position } from './position.entity';
 // import { format } from 'path';
-
+import { PositionDto} from './Position.Dto';
 
 
 @Injectable()
@@ -14,21 +14,33 @@ export class PositionsService {
   ) {}
 
   async findAll(): Promise<Position[]> {
+    const store=this.positionsRepository.find();
     return this.positionsRepository.find();
+
   }
+  
 
   async findOne(id: number): Promise<Position> {
     return this.positionsRepository.findOne({ where: { id } });
   }
 
-  async create(positionData: Partial<Position>): Promise<Position> {
-    const newPosition = this.positionsRepository.create(positionData);
-    return this.positionsRepository.save(newPosition);
+ async create(createPositionDto: PositionDto): Promise<Position> {
+    const position = new Position();
+    position.name = createPositionDto.name;
+    position.description = createPositionDto.description;
+    position.parent = createPositionDto.parentId ? { id: createPositionDto.parentId } as Position : null;
+    return this.positionsRepository.save(position);
   }
 
-  async update(id: number, positionData: Partial<Position>): Promise<Position> {
-    await this.positionsRepository.update(id, positionData);
-    return this.positionsRepository.findOne({ where: { id } });
+  async update(id: number, updatePositionDto: PositionDto): Promise<Position> {
+    const position = await this.findOne(id);
+    if (!position) {
+      throw new NotFoundException(`Position with id ${id} not found`);
+    }
+    position.name = updatePositionDto.name || position.name;
+    position.description = updatePositionDto.description || position.description;
+    position.parent = updatePositionDto.parentId ? { id: updatePositionDto.parentId } as Position : position.parent;
+    return this.positionsRepository.save(position);
   }
 
   async remove(id: number): Promise<void> {
@@ -68,49 +80,31 @@ export class PositionsService {
 
     return parentPosition.children;
   }
- // Find the root position with id 1 or you prefere but on these project the id=1 because root not is not parent id 
-  async getHierarchy(positionId: number): Promise<Position> {
-    const root = await this.positionsRepository.findOne({
-      where: { id: positionId },
-      relations: ['children'],
+
+async getHierarchy(): Promise<Position[]> {
+  const positions = await this.positionsRepository.find();
+  const positionMap = new Map<number, Position>();
+  positions.forEach(position => {
+    positionMap.set(position.id, { ...position, children: [] });
+  });
+//... means spread operator
+  const buildHierarchy = (position: Position): Position => { 
+    const children = positions.filter(pos => pos.parentId == position.id);
+    children.forEach(child => {
+      const childNode = buildHierarchy(child);
+   positionMap.get(position.id).children.push(childNode);
     });
-   
-
- // Handle the case where the position is not found
-    if (!root) {
-      throw new Error(`Position with id ${positionId} not found`);
-    }
-// Build the hierarchy starting from the root
-    await this.buildHierarchy(root);
-
-     // Return the root position with its full hierarchy
-    return root;
-  }
- // Fetch children for the current position
-//  buildHierarchy method to recursively fetch and assign all 
-// children to their respective parents.
-  private async buildHierarchy(position: Position): Promise<void> {
-    const children = await this.positionsRepository.find({
-      where: { parentId: position.id },
-      relations: ['children'],
-    });
-// Assign children to the current position
-    position.children = children;
-// Recursively build the hierarchy for each child
-    for (const child of position.children) {
-      await this.buildHierarchy(child);
-    }
-  }
-
-  //only find the root node soon  ...............
-
-// async getRootNode(): Promise<Position[]> {
-//   return await this.positionsRepository.find({ where: { parentId: null } });
-// }
+    return positionMap.get(position.id);
+  };
+  const roots: Position[] = positions.filter(position => !position.parentId);
+console.log(roots)
+  // Build and return the tree structure starting from the roots
+  return roots.map(root => buildHierarchy(root));
+}
 
 async getRoot(): Promise<Position[]> {
   const rootNodes = await this.positionsRepository.find({
-    where: { parentId: null },
+    where: { parentId: IsNull() },
     relations:[]
   });
 
@@ -122,41 +116,38 @@ async getRoot(): Promise<Position[]> {
 }
 
 
-  //find  any children backtrace soon ...............
-// Fetch the upward hierarchy starting from a given positionId
 async getHierarchyUpwards(positionId: number): Promise<Position[]> {
-   // Fetch the position with the given ID and its immediate parent
-  const position = await this.positionsRepository.findOne({
-    where: { id: positionId },
-    relations: ['parent'],
-  });
+  // Fetch all positions from the repository
+  const positions = await this.positionsRepository.find();
 
-  // Handle the case where the position is not found
-  if (!position) {
+  // Create a map to store positions by their IDs
+  const positionMap = new Map<number, Position>();
+  positions.forEach(position => positionMap.set(position.id, position));
+
+  // Find the starting position
+  const startPosition = positionMap.get(positionId);
+  if (!startPosition) {
     throw new Error(`Position with id ${positionId} not found`);
   }
-// Build the upward hierarchy starting from the current position
-  const hierarchy = await this.buildHierarchyUpwards(position);
+
+  // Build the upward hierarchy starting from the current position
+  const hierarchy = this.buildHierarchyUpwards(startPosition, positionMap);
   return hierarchy;
 }
 
-// Recursively fetch parent positions
-private async buildHierarchyUpwards(position: Position): Promise<Position[]> {
+// Build the upward hierarchy using a map of positions
+private buildHierarchyUpwards(position: Position, positionMap: Map<number, Position>): Position[] {
   const hierarchy: Position[] = [];
   let currentPosition = position;
 
   while (currentPosition) {
     hierarchy.unshift(currentPosition); // Add the current position to the start of the array
-    currentPosition = currentPosition.parentId
-      ? await this.positionsRepository.findOne({ where: { id: currentPosition.parentId } })
-      : null;
-
-        //? is used for true case 
-        //: used for false
+    currentPosition = currentPosition.parentId ? positionMap.get(currentPosition.parentId) : null;
   }
 
   return hierarchy;
 }
+
 }
 
 
@@ -166,14 +157,46 @@ private async buildHierarchyUpwards(position: Position): Promise<Position[]> {
 
 
 
+ 
 
 
 
 
 
 
+// async getHierarchy(positionId: number): Promise<Position> {
+//   const root = await this.positionsRepository.findOne({
+//     where: { id: positionId },
+//     relations: ['children'],
+//   });
+ 
 
+// // Handle the case where the position is not found
+//   if (!root) {
+//     throw new Error(`Position with id ${positionId} not found`);
+//   }
+// // Build the hierarchy starting from the root
+//   await this.buildHierarchy(root);
 
+//    // Return the root position with its full hierarchy
+//   return root;
+// }
+// // Fetch children for the current position
+// //  buildHierarchy method to recursively fetch and assign all 
+// // children to their respective parents.
+// private async buildHierarchy(position: Position): Promise<void> {
+
+//   const children = await this.positionsRepository.find({
+//     where: { parentId: position.id },
+//     relations: ['children'],
+//   });
+// // Assign children to the current position
+//   position.children = children;
+// // Recursively build the hierarchy for each child
+//   for (const child of position.children) {
+//     await this.buildHierarchy(child);
+//   }
+// }
 
 
 // async getHierarchy(positionId: number): Promise<Position> {
